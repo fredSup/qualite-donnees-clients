@@ -1,0 +1,27 @@
+[project]
+name = "qdc"
+version = "0.1.0"
+description = "Outil de qualite et d'unification des donnees clients, assiste par IA"
+requires-python = ">=3.11"
+dependencies = [
+    "faker>=40",
+    "polars>=1.0",
+    "pyarrow>=17",
+    "xlsxwriter>=3.2",
+    "fastexcel>=0.12",
+    "duckdb>=1.1",
+    "rapidfuzz>=3.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
