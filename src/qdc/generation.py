@@ -93,8 +93,19 @@ def format_date(d: date, style: str) -> str:
 
 
 # --- Etape 1 : les vraies personnes ------------------------------------------
+def email_unique(base: str, domaine: str, pris: set[str], rng: random.Random) -> str:
+    """Dans la realite, une adresse e-mail appartient a UNE personne : deux homonymes
+    (deux « Jean Martin ») ne peuvent pas avoir la meme. On ajoute un numero si besoin."""
+    email = f"{base}@{domaine}"
+    while email in pris:
+        email = f"{base}{rng.randint(1, 999)}@{domaine}"
+    pris.add(email)
+    return email
+
+
 def generer_personnes(cfg: Config, fake: Faker, rng: random.Random) -> list[dict]:
     personnes = []
+    pris: set[str] = set()
     for pid in range(1, cfg.n_personnes + 1):
         femme = rng.random() < 0.5
         prenom = fake.first_name_female() if femme else fake.first_name_male()
@@ -108,7 +119,7 @@ def generer_personnes(cfg: Config, fake: Faker, rng: random.Random) -> list[dict
             "prenom": prenom,
             "nom": nom,
             "date_naissance": fake.date_of_birth(minimum_age=18, maximum_age=85),
-            "email": f"{base_mail}{suffixe}@{domaine}",
+            "email": email_unique(base_mail + suffixe, domaine, pris, rng),
             "telephone": "0" + rng.choice("67") + "".join(rng.choices("0123456789", k=8)),
             "adresse": fake.street_address(),
             "code_postal": None,
@@ -119,7 +130,8 @@ def generer_personnes(cfg: Config, fake: Faker, rng: random.Random) -> list[dict
         p["code_postal"], p["ville"] = tirer_commune(rng)
         # Identifiants secondaires : un client n'a pas toujours le meme e-mail / numero partout
         pro = rng.choice(["entreprise.fr", "groupe-conseil.com", "univ-paris.fr", "laposte.net"])
-        p["email_alt"] = f"{sans_accents(p['prenom'][0] + p['nom']).lower().replace(' ', '')}@{pro}"
+        base_pro = sans_accents(p["prenom"][0] + p["nom"]).lower().replace(" ", "").replace("'", "")
+        p["email_alt"] = email_unique(base_pro, pro, pris, rng)
         p["tel_alt"] = "0" + rng.choice("67") + "".join(rng.choices("0123456789", k=8))
 
     # Foyers : certaines personnes vivent avec une autre et partagent le fixe et l'adresse.
