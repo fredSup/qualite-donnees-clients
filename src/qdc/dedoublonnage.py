@@ -29,7 +29,10 @@ from rapidfuzz.process import cpdist
 
 from qdc import regles
 
-SEUIL_DOUBLON = 7.0     # score >= 7 : meme personne, fusion automatique
+# Seuils calibres en mesurant, pour chaque score, la part de vrais doublons (voir README).
+# En entreprise, sans "verite", on calibre sur un echantillon etiquete a la main
+# (c'est ce que produit la file de revue humaine).
+SEUIL_DOUBLON = 6.0     # score >= 6 : meme personne, fusion automatique (99-100 % de vrais doublons)
 SEUIL_DIFFERENT = 3.0   # score <  3 : personnes differentes
 TAILLE_BLOC_MAX = 300   # un bloc trop gros (nom tres frequent) ne sert a rien et coute cher
 
