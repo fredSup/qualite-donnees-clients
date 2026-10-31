@@ -11,6 +11,8 @@ dependencies = [
     "fastexcel>=0.12",
     "duckdb>=1.1",
     "rapidfuzz>=3.9",
+    "numpy>=1.26",
+
 ]
 
 [project.optional-dependencies]
