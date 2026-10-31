@@ -22,3 +22,20 @@ COMMUNES = [
 
 # Index CP -> ville, pour le controle de coherence
 VILLE_PAR_CP: dict[str, str] = {cp: ville for cp, ville, _ in COMMUNES}
+
+
+# Prenoms connus, avec leur genre.
+# Ici on reutilise la liste de Faker pour la demo. En production, on prendrait le
+# "Fichier des prenoms" de l'INSEE (open data, environ 30 000 prenoms) : meme code, autre fichier.
+def _prenoms() -> tuple[set[str], set[str]]:
+    from faker.providers.person.fr_FR import Provider
+    import unicodedata
+
+    def cle(p: str) -> str:  # "Élisabeth" -> "ELISABETH" : on compare sans accents
+        return "".join(c for c in unicodedata.normalize("NFD", p) if unicodedata.category(c) != "Mn").upper()
+
+    return {cle(p) for p in Provider.first_names_female}, {cle(p) for p in Provider.first_names_male}
+
+
+PRENOMS_FEMININS, PRENOMS_MASCULINS = _prenoms()
+PRENOMS = PRENOMS_FEMININS | PRENOMS_MASCULINS

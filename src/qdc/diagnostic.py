@@ -36,7 +36,7 @@ CHAMPS_VALIDITE = {
 FRAICHEUR_ANS = 3
 
 # Quels champs chaque source collecte-t-elle ?
-APPLICABLE = {s.nom: set(s.correspondance.values()) for s in SOURCES}
+APPLICABLE_BRONZE = {s.nom: set(s.correspondance.values()) for s in SOURCES}
 
 
 @dataclass
@@ -80,8 +80,11 @@ def groupes_evidents(df: pl.DataFrame) -> pl.Series:
     return g["groupe"]
 
 
-def diagnostiquer(df: pl.DataFrame, aujourd_hui: date | None = None) -> Diagnostic:
+def diagnostiquer(df: pl.DataFrame, aujourd_hui: date | None = None,
+                  applicable: dict[str, set[str]] | None = None) -> Diagnostic:
+    """`applicable` : champs collectes par chaque source (par defaut, ceux de la couche bronze)."""
     aujourd_hui = aujourd_hui or date.today()
+    APPLICABLE = applicable or APPLICABLE_BRONZE
     ref = pl.lit(aujourd_hui)
     lignes: list[dict] = []
     exemples: dict[str, list[str]] = {}
