@@ -22,6 +22,8 @@ from pathlib import Path
 import polars as pl
 from faker import Faker
 
+from qdc.referentiel import COMMUNES
+
 
 # --- Parametres de "salete" : un seul endroit pour les regler ---------------
 @dataclass(frozen=True)
@@ -41,28 +43,11 @@ class Config:
     p_email_invalide: float = 0.02
     p_cp_incoherent: float = 0.02
     p_demenagement: float = 0.05  # adresse differente selon la source (donnee perimee)
+    # Pieges pour le dedoublonnage
+    p_autre_email: float = 0.20   # e-mail pro ou ancien e-mail dans une source
+    p_autre_tel: float = 0.12     # ancien numero dans une source
+    p_foyer: float = 0.04         # couple : meme adresse, meme telephone fixe (2 personnes DIFFERENTES)
 
-
-
-# Vraies communes (code postal, ville) : indispensable pour tester la coherence CP / ville.
-# Les grandes villes pesent plus lourd, comme dans un vrai fichier clients.
-COMMUNES = [
-    ("75001", "Paris", 3), ("75011", "Paris", 4), ("75015", "Paris", 4), ("75018", "Paris", 3),
-    ("75020", "Paris", 3), ("13001", "Marseille", 3), ("13008", "Marseille", 2), ("69001", "Lyon", 2),
-    ("69003", "Lyon", 3), ("69007", "Lyon", 2), ("31000", "Toulouse", 3), ("06000", "Nice", 2),
-    ("44000", "Nantes", 3), ("67000", "Strasbourg", 2), ("34000", "Montpellier", 2), ("33000", "Bordeaux", 3),
-    ("59000", "Lille", 3), ("35000", "Rennes", 2), ("51100", "Reims", 1), ("76600", "Le Havre", 1),
-    ("42000", "Saint-Étienne", 1), ("83000", "Toulon", 1), ("38000", "Grenoble", 2), ("21000", "Dijon", 1),
-    ("49000", "Angers", 1), ("30000", "Nîmes", 1), ("63000", "Clermont-Ferrand", 1), ("72000", "Le Mans", 1),
-    ("13100", "Aix-en-Provence", 1), ("29200", "Brest", 1), ("37000", "Tours", 1), ("80000", "Amiens", 1),
-    ("87000", "Limoges", 1), ("74000", "Annecy", 1), ("66000", "Perpignan", 1), ("57000", "Metz", 1),
-    ("25000", "Besançon", 1), ("45000", "Orléans", 1), ("76000", "Rouen", 1), ("14000", "Caen", 1),
-    ("68100", "Mulhouse", 1), ("54000", "Nancy", 1), ("92100", "Boulogne-Billancourt", 2),
-    ("93100", "Montreuil", 2), ("94000", "Créteil", 1), ("92000", "Nanterre", 1), ("93200", "Saint-Denis", 2),
-    ("95000", "Cergy", 1), ("78000", "Versailles", 1), ("91000", "Évry-Courcouronnes", 1),
-    ("77000", "Melun", 1), ("64000", "Pau", 1), ("17000", "La Rochelle", 1), ("86000", "Poitiers", 1),
-    ("56100", "Lorient", 1), ("97400", "Saint-Denis", 1), ("2A000", "Ajaccio", 1),
-]
 
 
 def tirer_commune(rng: random.Random) -> tuple[str, str]:
@@ -130,7 +115,25 @@ def generer_personnes(cfg: Config, fake: Faker, rng: random.Random) -> list[dict
             "ville": None,
             "date_inscription": fake.date_between(start_date=date(2018, 1, 1), end_date=date(2026, 9, 30)),
         })
-        personnes[-1]["code_postal"], personnes[-1]["ville"] = tirer_commune(rng)
+        p = personnes[-1]
+        p["code_postal"], p["ville"] = tirer_commune(rng)
+        # Identifiants secondaires : un client n'a pas toujours le meme e-mail / numero partout
+        pro = rng.choice(["entreprise.fr", "groupe-conseil.com", "univ-paris.fr", "laposte.net"])
+        p["email_alt"] = f"{sans_accents(p['prenom'][0] + p['nom']).lower().replace(' ', '')}@{pro}"
+        p["tel_alt"] = "0" + rng.choice("67") + "".join(rng.choices("0123456789", k=8))
+
+    # Foyers : certaines personnes vivent avec une autre et partagent le fixe et l'adresse.
+    # Ce sont des personnes DIFFERENTES : une regle "meme telephone = meme client" se trompera.
+    for p in personnes:
+        if rng.random() < cfg.p_foyer:
+            conjoint = rng.choice(personnes)
+            if conjoint is p:
+                continue
+            fixe = "0" + rng.choice("12345") + "".join(rng.choices("0123456789", k=8))
+            p["tel_alt"] = conjoint["tel_alt"] = fixe
+            conjoint["nom"] = p["nom"] if rng.random() < 0.6 else conjoint["nom"]
+            for c in ("adresse", "code_postal", "ville"):
+                conjoint[c] = p[c]
     return personnes
 
 
@@ -149,6 +152,11 @@ def salir(p: dict, cfg: Config, fake: Faker, rng: random.Random) -> dict:
     # Prenom abrege
     if rng.random() < 0.05:
         r["prenom"] = r["prenom"][0] + "."
+    # Identifiants secondaires (autre e-mail, ancien numero ou fixe du foyer)
+    if rng.random() < cfg.p_autre_email:
+        r["email"] = r["email_alt"]
+    if rng.random() < cfg.p_autre_tel:
+        r["telephone"] = r["tel_alt"]
     # E-mail : majuscules, espaces, ou invalide
     if rng.random() < 0.10:
         r["email"] = r["email"].capitalize()
