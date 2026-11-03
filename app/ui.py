@@ -39,6 +39,17 @@ def injecter_style() -> None:
     .u-note { color:#5B6E6A; font-size: .88rem; }
     .u-fiche td.o { text-align:right; color:#7A8C88; font-size:.76rem; white-space:nowrap; font-family: ui-monospace, monospace; }
     .u-apercu { border: 1px dashed #B9CEC8; border-radius: 12px; padding: 1rem 1.2rem; color:#4A5E5A; background:#FAFCFB; }
+    /* Boutons d'acces aux modes (page d'accueil) */
+    [data-testid="stPageLink-NavLink"] { background: var(--vert); border-radius: 8px; padding: .5rem 1.1rem;
+        width: fit-content; transition: background .15s, transform .15s, box-shadow .15s; }
+    [data-testid="stPageLink-NavLink"] * { color: #fff !important; font-weight: 600; }
+    [data-testid="stPageLink-NavLink"]:hover { background: #0B5443; transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(15,110,86,.28); }
+    /* Menu de gauche : survol et page active un peu plus marques */
+    [data-testid="stSidebarNavLink"] { transition: background .15s; }
+    [data-testid="stSidebarNavLink"]:hover { background: #D3E7E1 !important; }
+    [data-testid="stSidebarNavLink"][aria-current="page"] { background: #C3DED6 !important; }
+    [data-testid="stSidebarNavLink"][aria-current="page"] * { color: var(--vert) !important; font-weight: 600; }
     </style>
     """), unsafe_allow_html=True)
 
