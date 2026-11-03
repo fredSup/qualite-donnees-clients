@@ -200,6 +200,20 @@ def est_identifiant(nom: str) -> bool:
                           r"|^ref\b|^ref[_\s-]|reference|identifiant|uuid|^code[_\s-]?client)", n))
 
 
+def ressemble_a_un_identifiant(serie: pl.Series) -> bool:
+    """Reconnait un identifiant a ses VALEURS, quel que soit le nom de la colonne :
+    une valeur differente sur chaque ligne, au format « code » (CRM-01, A12345, 000123...).
+    Un montant (« 1 250,00 ») ou une categorie (« Gold ») ne passe pas ce test."""
+    s = serie.drop_nulls().cast(pl.String).str.strip_chars()
+    s = s.filter(s != "")
+    if s.len() < 2 or s.n_unique() != s.len():
+        return False
+    code = s.str.contains(r"^[A-Za-z]*[-_/]?\d+[A-Za-z0-9\-_/]*$")
+    lettres_et_chiffres = s.str.contains(r"[A-Za-z]") & s.str.contains(r"\d")
+    longueur_fixe = s.str.contains(r"^\d{3,}$").all() and s.str.len_chars().n_unique() == 1
+    return bool(code.all() and (lettres_et_chiffres.all() or longueur_fixe))
+
+
 def deviner_correspondance(df: pl.DataFrame) -> dict[str, str]:
     """Pour chaque colonne : le champ standard qu'elle represente, ou CONSERVER.
     1. les identifiants techniques sont conserves tels quels ;
@@ -288,15 +302,17 @@ def ingerer_fichiers(fichiers: list[tuple[str, pl.DataFrame, dict[str, str]]], b
         morceaux.append(lf.select(SCHEMA_COMMUN).with_columns(pl.lit(nom).alias("_fichier")))
         gardees = [c for c, ch in corresp.items() if ch == CONSERVER]
         if gardees:
+            ids = {c for c in gardees if est_identifiant(c) or ressemble_a_un_identifiant(df[c])}
             extras.append(texte.select("record_id", *gardees).unpivot(index="record_id", variable_name="colonne",
-                                                                    value_name="valeur").drop_nulls("valeur"))
+                                                                    value_name="valeur").drop_nulls("valeur")
+                          .with_columns(identifiant=pl.col("colonne").is_in(list(ids))))
         config += [{"source": nom, "colonne_origine": c, "champ": ch, "ordre": i}
                    for i, (c, ch) in enumerate(corresp.items())]
 
     bronze = pl.concat(morceaux).with_columns(
         pl.lit(datetime.now(timezone.utc).isoformat(timespec="seconds")).alias("_ingere_le"))
     extra = pl.concat(extras) if extras else pl.DataFrame(schema={"record_id": pl.String, "colonne": pl.String,
-                                                                 "valeur": pl.String})
+                                                                 "valeur": pl.String, "identifiant": pl.Boolean})
     base.parent.mkdir(parents=True, exist_ok=True)
     with duckdb.connect(str(base)) as con:
         for table, d in (("bronze_clients", bronze), ("colonnes_extra", extra), ("sources_config", pl.DataFrame(config))):

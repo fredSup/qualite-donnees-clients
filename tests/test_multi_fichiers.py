@@ -168,3 +168,27 @@ def test_fichiers_alignes_sur_la_fiche_unique(tmp_path):
     pipeline.executer_fichiers(fichiers, base)
     assert pipeline.fichier_corrige(base, "A")["Prénom"].item() == "Luccie"  # ses propres valeurs
     assert pipeline.fichier_corrige(base, "A", valeurs_referentiel=True)["Prénom"].item() == "Lucie"  # la fiche unique
+
+
+def test_jeu_de_test_crm_facturation(tmp_path):
+    """Le jeu construit avec un corrige : 22 fiches, 13 vraies personnes, 2 pieges."""
+    from pathlib import Path
+
+    from qdc import atelier
+    d = Path(__file__).parent / "donnees"
+    fichiers = []
+    for n in ("test_mode2_crm.csv", "test_mode2_facturation.xlsx"):
+        t = atelier.charger((d / n).read_bytes(), n)
+        fichiers.append((n.split(".")[0], t, ingestion.deviner_correspondance(t)))
+    base = tmp_path / "q.duckdb"
+    r = pipeline.executer_fichiers(fichiers, base)
+    assert (r["fiches"], r["clients"], r["ambigus"]) == (22, 13, 1)
+    g = pipeline.lire(base, "gold_clients")
+    fiche = lambda prenom, nom: g.filter((pl.col("prenom") == prenom) & (pl.col("nom") == nom))  # noqa: E731
+    assert fiche("Hélène", "Fontaine").height == 1 and fiche("Claire", "Fontaine").height == 1  # piege 1
+    assert fiche("Jean", "Martin").height == 2                                                   # piege 2
+    sophie = fiche("Sophie", "Lambert").row(0, named=True)
+    assert sophie["n_fiches"] == 3
+    assert sophie["email"] == "sophie.lambert@gmail.com"          # l'e-mail majoritaire, pas l'adresse pro
+    assert sophie["conflits"] == []                               # « Num CRM » est un identifiant : pas de faux conflit
+    assert g.filter(pl.col("nom") == "Dupuy").is_empty()          # la fiche la plus complete gagne : « Dupuis »

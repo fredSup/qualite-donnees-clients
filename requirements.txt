@@ -1,4 +1,4 @@
-# Versions testees (76 tests). Streamlit Cloud installe ce fichier.
+# Versions testees (84 tests). Streamlit Cloud installe ce fichier.
 duckdb==2.0.0
 faker==40.44.0
 fastexcel==0.21.0

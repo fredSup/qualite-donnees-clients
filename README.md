@@ -94,7 +94,7 @@ python -m venv venv
 venv\Scripts\activate            # macOS / Linux : source venv/bin/activate
 pip install -r requirements.txt
 pip install -e ".[dev]"
-pytest                            # 76 tests
+pytest                            # 84 tests
 streamlit run app/app.py
 ```
 
@@ -116,7 +116,7 @@ python -m qdc.fusion && python -m qdc.rapport
 
 ## Feuille de route
 - [ ] Connexion directe à un CRM (HubSpot) et à une base PostgreSQL
-- [ ] Règles de plausibilité par type de colonne (un âge entre 0 et 120 ans) en plus de la méthode statistique
+- [x] Règles de bon sens par colonne (un âge entre 0 et 120 ans), proposées par l'IA ou par des règles connues, distinctes des valeurs simplement inhabituelles
 - [ ] Contrôles comptables : SIRET, IBAN, factures en double
 - [ ] L'IA propose le plan de nettoyage et comprend les demandes en français, dans l'atelier
 

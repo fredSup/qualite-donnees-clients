@@ -1,0 +1,12 @@
+Num CRM;Prénom;Nom;E-mail;Mobile;Date de naissance;CP;Ville;Segment
+CRM-01;Sophie;Lambert;sophie.lambert@gmail.com;06 11 22 33 44;12/04/1988;69003;Lyon;Gold
+CRM-02;Marc;Dupuis;marc.dupuis@orange.fr;06.22.33.44.55;03/09/1975;75011;Paris;Silver
+CRM-03;Léa;Moreau;lea.moreau@free.fr;0633445566;21/01/1992;44000;Nantes;Silver
+CRM-04;Paul;Girard;paul.girard@gmail.com;+33 6 44 55 66 77;30/06/1983;59000;Lille;Bronze
+CRM-05;Claire;Fontaine;claire.fontaine@yahoo.fr;06 55 66 77 88;14/11/1990;35000;Rennes;Gold
+CRM-06;Jean;Martin;jean.martin@gmail.com;06 66 77 88 99;02/02/1960;75015;Paris;Silver
+CRM-07;Jean;Martin;jmartin75@outlook.fr;07 12 34 56 78;17/08/1995;13008;Marseille;Bronze
+CRM-08;Nadia;Benali;nadia.benali@gmail.com;06 77 88 99 00;25/12/1987;31000;Toulouse;Gold
+CRM-09;Thomas;Roussel;thomas.roussel@free.fr;06 88 99 00 11;09/03/1979;33000;Bordeaux;Silver
+CRM-10;Inès;Caron;ines.caron@gmail.com;06 99 00 11 22;11/07/1999;67000;Strasbourg;Bronze
+CRM-11;Sophie;Lambert; Sophie.Lambert@Gmail.com ;0611223344;12/04/1988;69003;Lyon;Gold

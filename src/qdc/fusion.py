@@ -59,6 +59,12 @@ def _prioriser(df: pl.DataFrame) -> pl.DataFrame:
         freq_nom=pl.len().over("client", "nom_cle"),
         freq_civ=pl.len().over("client", "civilite"),
         freq_dn=pl.len().over("client", "date_naissance"),
+        freq_email=pl.len().over("client", "email"),
+        # Richesse d'une fiche : combien d'informations d'identite elle contient. A egalite de votes
+        # (« Dupuis » 1 contre « Dupuy » 1), la fiche la plus complete est la plus fiable.
+        richesse=pl.sum_horizontal([pl.col(c).is_not_null() for c in
+                                    ("prenom", "nom", "email", "telephone", "adresse", "code_postal",
+                                     "date_naissance", "civilite")]),
     )
 
 
@@ -96,13 +102,15 @@ def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame, extras: pl.DataFrame 
     choix = [
         # prenom : pas une initiale, puis la valeur MAJORITAIRE, puis la source la plus fiable.
         # (Piege evite : « le plus long » choisissait les fautes qui doublent une lettre, « Luccie ».)
-        _meilleur(df, ["prenom"], [pl.col("est_initiale"), pl.col("freq_prenom"), p, r], [False, True, False, True]),
+        _meilleur(df, ["prenom"], [pl.col("est_initiale"), pl.col("freq_prenom"), p, pl.col("richesse"), r],
+                  [False, True, False, True, True]),
         # nom, civilite, date de naissance : la valeur majoritaire, puis la source la plus fiable
-        _meilleur(df, ["nom"], [pl.col("freq_nom"), p, r], [True, False, True]),
-        _meilleur(df, ["civilite"], [pl.col("freq_civ"), p, r], [True, False, True]),
-        _meilleur(df, ["date_naissance"], [pl.col("freq_dn"), p, r], [True, False, True]),
+        _meilleur(df, ["nom"], [pl.col("freq_nom"), p, pl.col("richesse"), r], [True, False, True, True]),
+        _meilleur(df, ["civilite"], [pl.col("freq_civ"), p, pl.col("richesse"), r], [True, False, True, True]),
+        _meilleur(df, ["date_naissance"], [pl.col("freq_dn"), p, pl.col("richesse"), r], [True, False, True, True]),
         # e-mail : le plus recent (les autres restent dans la liste `emails`)
-        _meilleur(df, ["email"], [r, p], [True, False]),
+        # e-mail : le plus frequent (l'adresse perso utilisee partout, plutot qu'une adresse pro isolee)
+        _meilleur(df, ["email"], [pl.col("freq_email"), r, p, pl.col("richesse")], [True, True, False, True]),
         _meilleur(df, ["id_client"], [r, p], [True, False]),
         # telephone : un mobile de preference, puis le plus recent
         _meilleur(df, ["telephone"], [pl.col("est_mobile"), r], [True, True]),
@@ -141,7 +149,9 @@ def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame, extras: pl.DataFrame 
     # Desaccords : la meme colonne a des valeurs differentes selon les fiches d'un meme client
     # (ex. Montant 1200 dans l'Excel, 1012.2 dans le CSV). On garde une valeur, mais on le SIGNALE.
     # Les identifiants techniques de chaque logiciel different par nature : on ne les compare pas.
-    desaccords = (extras.filter(~pl.col("colonne").map_elements(est_identifiant, return_dtype=pl.Boolean))
+    est_id = (pl.col("identifiant") if "identifiant" in extras.columns
+              else pl.col("colonne").map_elements(est_identifiant, return_dtype=pl.Boolean))
+    desaccords = (extras.filter(~est_id)
                   .join(df.select("record_id", "client"), on="record_id")
                   .group_by("client", "colonne").agg(pl.col("valeur").unique().sort())
                   .filter(pl.col("valeur").list.len() > 1)
