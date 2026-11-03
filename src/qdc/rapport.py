@@ -68,8 +68,10 @@ def collecter_faits(base: Path, aujourd_hui: date | None = None) -> dict:
         cles = {q_["_cle"] for q_ in ia.preparer_lot(ambigues, silver)}
         n_ia = ia.lire_cache(base).filter(pl.col("cle").is_in(list(cles))).height
 
-    diag_avant = diagnostic.diagnostiquer(bronze, aujourd_hui)
-    df_g, applicable = fusion.pour_diagnostic(gold)
+    from qdc.ingestion import applicable
+    diag_avant = diagnostic.diagnostiquer(bronze, aujourd_hui, applicable=applicable(base))
+    from qdc.ingestion import champs_collectes
+    df_g, applicable = fusion.pour_diagnostic(gold, champs_collectes(base))
     diag_apres = diagnostic.diagnostiquer(df_g, aujourd_hui, applicable=applicable)
     avant = diag_avant.details
     s_avant, s_apres = diag_avant.score_global / 100, diag_apres.score_global / 100
@@ -78,11 +80,11 @@ def collecter_faits(base: Path, aujourd_hui: date | None = None) -> dict:
     par_source = {}
     for src, part in avant.group_by("source"):
         src = src[0]
-        if src not in NOMS_SOURCES:
+        if src == "toutes":
             continue
         faibles = part.filter((pl.col("taux") < 0.95) & (pl.col("champ") != "doublons internes")).sort("taux")
         j = journal.filter(pl.col("source") == src).sort("n", descending=True)
-        par_source[NOMS_SOURCES[src]] = {
+        par_source[NOMS_SOURCES.get(src, src)] = {
             "fiches": nb(bronze.filter(pl.col("source") == src).height),
             "points_faibles": [f"{r['dimension']} - {r['champ']} : {pct(r['taux'])} %" for r in faibles.iter_rows(named=True)],
             "corrections_appliquees": {r["op"]: nb(r["n"]) for r in j.filter(pl.col("type") == "correction").iter_rows(named=True)},
@@ -170,34 +172,39 @@ def verifier_chiffres(rapport: str, faits: dict) -> list[str]:
 def rapport_modele(f: dict) -> str:
     """Version sans IA : un modele de texte fixe, rempli avec les faits."""
     lignes = [
-        "## Synthese",
-        f"Le fichier contenait {f['nombre_de_fiches_avant_traitement']} fiches pour {f['nombre_de_clients_distincts_apres_traitement']} clients distincts identifies : "
-        f"{f['part_de_fiches_en_double_AVANT_traitement']} % des fiches etaient redondantes. Apres traitement, le score de qualite "
-        f"passe de {f['score_qualite_avant_traitement']} a {f['score_qualite_apres_traitement']} / 100.",
-        "", "## Etat initial du fichier",
+        "## Synthèse",
+        f"Le fichier contenait {f['nombre_de_fiches_avant_traitement']} fiches pour "
+        f"{f['nombre_de_clients_distincts_apres_traitement']} clients distincts identifiés : "
+        f"{f['part_de_fiches_en_double_AVANT_traitement']} % des fiches étaient en double. Après traitement, "
+        f"le score de qualité passe de {f['score_qualite_avant_traitement']} à "
+        f"{f['score_qualite_apres_traitement']} / 100.",
+        "", "## État initial du fichier",
     ]
     for src, d in f["sources"].items():
         faibles = ", ".join(d["points_faibles"][:4]) or "aucun point faible majeur"
-        lignes.append(f"- **{src}** ({d['fiches']} fiches) : {faibles}")
-    lignes += ["", "## Ce qui a ete corrige"]
+        lignes.append(f"- **{src[0].upper() + src[1:]}** ({d['fiches']} fiches) : {faibles}")
+    lignes += ["", "## Ce qui a été corrigé"]
     lignes += [f"- {op} : {n}" for op, n in f["corrections_appliquees_toutes_sources"].items()]
-    lignes += ["", "Problemes signales sans correction automatique :"]
+    lignes += ["", "Problèmes signalés, sans correction automatique :"]
     lignes += [f"- {op} : {n}" for op, n in f["anomalies_signalees_toutes_sources"].items()]
     lignes += [
-        "", "## Doublons : ce que le traitement a permis de reunifier",
-        f"- {f['clients_qui_avaient_plusieurs_fiches_et_sont_desormais_reunis']} clients avaient plusieurs fiches, dont "
-        f"{f['clients_reunis_qui_etaient_dans_les_3_systemes']} presents dans les 3 systemes.",
-        f"- {f['fiches_en_double_reunies']} fiches redondantes ont ete reunies.",
+        "", "## Doublons : ce que le traitement a permis de réunir",
+        f"- {f['clients_qui_avaient_plusieurs_fiches_et_sont_desormais_reunis']} clients avaient plusieurs fiches "
+        f"et sont désormais réunis, dont {f['clients_reunis_qui_etaient_dans_les_3_systemes']} présents dans les "
+        "3 systèmes.",
+        f"- {f['fiches_en_double_reunies']} fiches en double ont été réunies.",
         "", "## Points de vigilance",
-        f"- {f['cas_douteux_non_fusionnes_en_attente']} cas ambigus restent a examiner ({f['cas_douteux_deja_examines_par_ia']} deja analyses par l'IA).",
-        f"- {f['clients_avec_conflit_a_verifier_manuellement']} clients presentent un conflit a verifier.",
-        f"- {f['clients_sans_activite_depuis_plus_de_3_ans']} clients ({f['part_des_clients_sans_activite_depuis_plus_de_3_ans']} %) sont inactifs depuis plus de "
+        f"- {f['cas_douteux_non_fusionnes_en_attente']} cas douteux restent à examiner "
+        f"({f['cas_douteux_deja_examines_par_ia']} déjà analysés par l'IA).",
+        f"- {f['clients_avec_conflit_a_verifier_manuellement']} clients présentent un conflit à vérifier.",
+        f"- {f['clients_sans_activite_depuis_plus_de_3_ans']} clients "
+        f"({f['part_des_clients_sans_activite_depuis_plus_de_3_ans']} %) n'ont eu aucune activité depuis plus de "
         f"{f['seuil_inactivite_ans']} ans.",
         "", "## Recommandations",
-        "- Controler le format de l'e-mail et du telephone des la saisie, dans chaque formulaire.",
-        "- Demander au service client de renseigner systematiquement le prenom.",
+        "- Contrôler le format de l'e-mail et du téléphone dès la saisie, dans chaque formulaire.",
+        "- Demander au service client de renseigner systématiquement le prénom.",
         "- Lancer une campagne de requalification des clients inactifs.",
-        "- Faire examiner en priorite les clients signales en conflit.",
+        "- Faire examiner en priorité les clients signalés en conflit.",
     ]
     return "\n".join(lignes)
 
@@ -207,7 +214,7 @@ def rediger(faits: dict, appeler=None) -> tuple[str, str, list[str]]:
     if appeler is None:
         import os
         if not os.environ.get("GROQ_API_KEY"):
-            return rapport_modele(faits), "modele fixe (pas de cle API)", []
+            return rapport_modele(faits), "modèle fixe (pas de clé API)", []
         from groq import Groq
 
         # Un seul appel : on prend le grand modele, meilleur redacteur (impact negligeable sur le quota)
@@ -221,21 +228,21 @@ def rediger(faits: dict, appeler=None) -> tuple[str, str, list[str]]:
                          {"role": "user", "content": json.dumps(faits, ensure_ascii=False, indent=1)}]).strip()
     except Exception as e:
         print(f"  appel IA impossible ({type(e).__name__}) : rapport genere par le modele fixe")
-        return rapport_modele(faits), "modele fixe (IA indisponible)", []
+        return rapport_modele(faits), "modèle fixe (IA indisponible)", []
     if not texte.startswith("##"):
         texte = texte[texte.find("##"):] if "##" in texte else texte
     return texte, "IA", verifier_chiffres(texte, faits)
 
 
 def assembler(faits: dict, corps: str, auteur: str, suspects: list[str]) -> str:
-    entete = [f"# Audit qualite du fichier clients - {faits['date']}", "",
-              f"*Redige par : {auteur}. Chiffres calcules par le pipeline de donnees. "
-              "Document a relire avant diffusion.*", ""]
+    entete = [f"# Audit qualité du fichier clients · {faits['date']}", "",
+              f"*Rédigé par : {auteur}. Chiffres calculés par le pipeline de données. "
+              "Document à relire avant diffusion.*", ""]
     if suspects:
-        entete += [f"> ⚠️ Chiffres non retrouves dans les donnees : {', '.join(suspects)}. "
-                   "A verifier avant diffusion.", ""]
+        entete += [f"> ⚠️ Chiffres non retrouvés dans les données : {', '.join(suspects)}. "
+                   "À vérifier avant diffusion.", ""]
     elif auteur == "IA":
-        entete += ["> ✅ Tous les chiffres du rapport ont ete verifies dans les donnees.", ""]
+        entete += ["> ✅ Tous les chiffres du rapport ont été vérifiés dans les données.", ""]
     return "\n".join(entete) + corps + "\n"
 
 

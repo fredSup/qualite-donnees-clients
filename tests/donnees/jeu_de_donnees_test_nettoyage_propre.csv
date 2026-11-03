@@ -1,0 +1,18 @@
+ID Client;Nom Client;Age;Date Inscription;Montant Achat (€);Statut Compte
+101;Jean Dupont;34;2023-01-15;150.5;Actif
+102;Marie Curie;29;2023-02-20;89.0;Inactif
+103;Pierre Martin;45;2023-03-10;1012.2;Actif
+104;Lucie Bernard;34;2023-04-05;450.0;Actif
+105;Thomas Petit;-5;2023-05-12;75.2;En attente
+106;Sophie Durand;42;2023-06-01;302.32666666666665;Actif
+107;Camille Leroy;250;2023-06-18;310.0;Actif
+108;Antoine Moreau;31;2023-07-22;1012.2;Actif
+109;Julie Simon;27;2023-08-30;195.0;Inactif
+110;Nicolas Michel;50;2023-09-14;-50.0;Actif
+111;Emmanuelle Roux;38;;540.0;Actif
+112;Alexandre David;19;2023-11-03;20.0;
+113;Charlotte Bertrand;61;2035-12-31;830.0;Actif
+114;Gabriel Moreno;33;2024-01-10;110.0;Actif
+115;Chloe Fournier;22;2024-02-14;0.0;Inactif
+116;Julien Girard;34;2024-03-01;302.32666666666665;En attente
+117;Sarah Bonnet;150;2024-03-20;-487.00000000000006;

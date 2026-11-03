@@ -124,6 +124,7 @@ def nettoyer(bronze: pl.DataFrame, aujourd_hui: date | None = None) -> pl.DataFr
         si(pl.col("_st_dn") == "invalide", "date de naissance aberrante (supprimee)"),
         si(pl.col("_coherent") == False, "code postal incoherent avec la ville"),  # noqa: E712
         si(pl.col("_ordre_incertain"), "ordre prenom/nom incertain"),
+        si((regles.en_date(pl.col("date_creation")) > ref).fill_null(False), "date de creation dans le futur"),
     ]).list.drop_nulls()
 
     silver = df.with_columns(
@@ -143,7 +144,7 @@ def nettoyer(bronze: pl.DataFrame, aujourd_hui: date | None = None) -> pl.DataFr
     return silver.select(
         "record_id", "source", "civilite", "prenom", "nom", "email", "telephone", "adresse",
         "code_postal", "ville", "date_naissance", "date_creation", "date_dernier_contact",
-        "corrections", "anomalies",
+        pl.col("id_client").str.strip_chars().alias("id_client"), "corrections", "anomalies",
     )
 
 
@@ -156,13 +157,14 @@ def journal(silver: pl.DataFrame) -> pl.DataFrame:
     return pl.concat(morceaux).select("type", "operation", "n").sort(["type", "n"], descending=[False, True])
 
 
-def pour_diagnostic(silver: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, set[str]]]:
+def pour_diagnostic(silver: pl.DataFrame, applicable_bronze: dict[str, set[str]] | None = None
+                    ) -> tuple[pl.DataFrame, dict[str, set[str]]]:
     """Le diagnostic travaille sur du texte : on reconvertit les dates.
     Apres decoupe, les sources qui avaient un "nom complet" ont desormais prenom + nom."""
     from qdc.diagnostic import APPLICABLE_BRONZE
     applicable = {
         s: (champs - {"nom_complet"}) | ({"prenom", "nom"} if "nom_complet" in champs else set())
-        for s, champs in APPLICABLE_BRONZE.items()
+        for s, champs in (applicable_bronze or APPLICABLE_BRONZE).items()
     }
     return silver.with_columns(pl.col(pl.Date).cast(pl.String)), applicable
 

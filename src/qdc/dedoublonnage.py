@@ -41,8 +41,10 @@ TAILLE_BLOC_MAX = 300   # un bloc trop gros (nom tres frequent) ne sert a rien e
 def preparer(silver: pl.DataFrame) -> pl.DataFrame:
     """Cles de comparaison : majuscules, sans accents (meme cle que le referentiel)."""
     k = regles.norm_ville
+    if "id_client" not in silver.columns:  # donnees d'une version anterieure : identifiant inconnu
+        silver = silver.with_columns(pl.lit(None, dtype=pl.String).alias("id_client"))
     return silver.select(
-        "record_id", "source", "civilite", "email", "telephone", "code_postal", "date_naissance",
+        "record_id", "source", "civilite", "email", "telephone", "code_postal", "date_naissance", "id_client",
         k(pl.col("prenom")).alias("prenom"), k(pl.col("nom")).alias("nom"),
         k(pl.col("adresse")).alias("adresse"),
         pl.col("anomalies").list.contains("ordre prenom/nom incertain").alias("ordre_incertain"),
@@ -51,6 +53,7 @@ def preparer(silver: pl.DataFrame) -> pl.DataFrame:
 
 BLOCS = {
     "telephone": pl.col("telephone"),
+    "id_client": pl.col("id_client"),
     "email": pl.col("email"),
     "nom+cp": pl.col("nom").str.slice(0, 4) + "|" + pl.col("code_postal"),
     "nom+initiale": pl.col("nom").str.slice(0, 4) + "|" + pl.col("prenom").str.slice(0, 1),
@@ -113,6 +116,9 @@ def scorer(paires: pl.DataFrame, p: pl.DataFrame) -> pl.DataFrame:
     diff = lambda c: deux(c) & (pl.col(c) != pl.col(f"{c}_b"))  # noqa: E731
 
     indices = pl.concat_list([
+        # Identifiant commun a plusieurs fichiers : la preuve la plus forte qui soit
+        regle(egal("id_client"), 7, "même identifiant client"),
+        regle(diff("id_client"), -4, "identifiants clients différents"),
         regle(egal("email"), 4, "même e-mail"),
         regle(egal("telephone"), 2.5, "même téléphone"),
         regle(egal("date_naissance"), 3, "même date de naissance"),
