@@ -63,13 +63,16 @@ def groupes_evidents(df: pl.DataFrame) -> pl.Series:
     identifiant de son groupe, et on recommence jusqu'a ce que plus rien ne bouge.
     Tout est vectorise (pas de boucle ligne par ligne) : ca tient sur des millions de lignes.
     """
+    ident = (pl.col("id_client").cast(pl.String).str.strip_chars() if "id_client" in df.columns
+             else pl.lit(None, dtype=pl.String))
     g = df.select(
         regles.norm_email(pl.col("email")).alias("email_n"),
         regles.norm_telephone(pl.col("telephone")).alias("tel_n"),
+        ident.alias("id_n"),  # identifiant client commun a plusieurs fichiers
     ).with_row_index("groupe")
     for _ in range(50):
         avant = g["groupe"]
-        for cle in ("email_n", "tel_n"):
+        for cle in ("email_n", "tel_n", "id_n"):
             g = g.with_columns(
                 pl.when(pl.col(cle).is_not_null())
                 .then(pl.min_horizontal("groupe", pl.col("groupe").min().over(cle)))
@@ -93,6 +96,9 @@ def diagnostiquer(df: pl.DataFrame, aujourd_hui: date | None = None,
     for source, part in df.group_by("source", maintain_order=True):
         source = source[0]
         n = part.height
+        if source not in APPLICABLE:  # source inconnue : on considere les champs effectivement remplis
+            APPLICABLE = {**APPLICABLE, source: {c for c in CHAMPS_COMPLETUDE + ["date_naissance"]
+                                                 if c in part.columns and part[c].null_count() < n}}
         for champ in CHAMPS_COMPLETUDE:
             if champ not in APPLICABLE[source]:
                 continue
@@ -142,11 +148,13 @@ def diagnostiquer(df: pl.DataFrame, aujourd_hui: date | None = None,
 
     details = pl.DataFrame(lignes)
     resume = (
-        details.filter(pl.col("agrege")).group_by("dimension", maintain_order=True)
+        details.filter(pl.col("agrege") & (pl.col("n_concernes") > 0)).group_by("dimension", maintain_order=True)
         .agg(n_concernes=pl.col("n_concernes").sum(), n_ok=pl.col("n_ok").sum())
         .with_columns(taux=pl.col("n_ok") / pl.col("n_concernes"))
     )
-    score = round(100 * resume["taux"].mean(), 1)
+    # Une dimension sans aucune valeur a mesurer (ex. pas d'e-mail ni de telephone : validite) est
+    # « non mesurable » : on l'exclut du score au lieu de produire 0/0 = nan.
+    score = round(100 * resume["taux"].mean(), 1) if resume.height else 0.0
     return Diagnostic(details, resume, score, exemples, df.height)
 
 

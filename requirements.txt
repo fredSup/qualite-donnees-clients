@@ -1,0 +1,12 @@
+# Versions testees (76 tests). Streamlit Cloud installe ce fichier.
+duckdb==2.0.0
+faker==40.44.0
+fastexcel==0.21.0
+groq==1.7.0
+numpy==2.5.3
+polars==2.1.0
+pyarrow==26.0.0
+python-dotenv==1.2.3
+rapidfuzz==3.14.6
+streamlit==1.66.0
+xlsxwriter==3.2.9

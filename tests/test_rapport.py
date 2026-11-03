@@ -35,7 +35,7 @@ def test_pipeline_complet_et_faits_coherents(base):
 def test_rapport_sans_ia_ne_contient_que_des_chiffres_verifies(base):
     f = rapport.collecter_faits(base)
     corps, auteur, _ = rapport.rediger(f, appeler=lambda m: (_ for _ in ()).throw(RuntimeError("pas d'API")))
-    assert auteur.startswith("modele fixe")
+    assert auteur.startswith("modèle fixe")
     assert rapport.verifier_chiffres(corps, f) == []
 
 
@@ -44,7 +44,7 @@ def test_chiffre_invente_par_l_ia_detecte(base):
     texte = f"## Synthese\nScore de {f['score_qualite_avant_traitement']} a {f['score_qualite_apres_traitement']} / 100, soit 12 500 euros economises."
     corps, auteur, suspects = rapport.rediger(f, appeler=lambda m: texte)
     assert auteur == "IA" and suspects == ["12 500"]
-    assert "Chiffres non retrouves" in rapport.assembler(f, corps, auteur, suspects)
+    assert "Chiffres non retrouvés" in rapport.assembler(f, corps, auteur, suspects)
 
 
 def test_texte_avant_le_premier_titre_retire():

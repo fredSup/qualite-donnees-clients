@@ -27,7 +27,6 @@ import duckdb
 import polars as pl
 from rapidfuzz.distance import JaroWinkler
 
-from qdc import regles
 
 # Modele different de celui qui redige les reponses de Logi (gpt-oss-120b) : chez Groq, les
 # quotas sont PAR MODELE. Un gros traitement ici ne peut donc pas couper la demo Logi.
@@ -75,10 +74,19 @@ Reponds UNIQUEMENT en JSON, au format :
 
 
 # --- Preparation des questions ---------------------------------------------------------
+def cle(x: str) -> str:
+    """Meme cle que regles.norm_ville (majuscules, sans accents ni tirets), en Python pur :
+    pour une valeur isolee, c'est environ 100 fois plus rapide que de passer par Polars,
+    concu pour traiter des colonnes entieres."""
+    import unicodedata
+    t = "".join(c for c in unicodedata.normalize("NFD", x.upper()) if unicodedata.category(c) != "Mn")
+    return " ".join(t.replace("-", " ").replace("'", " ").split())
+
+
 def comparer(v1: str | None, v2: str | None) -> str:
     if v1 is None or v2 is None:
         return "inconnu"
-    a, b = (pl.select(regles.norm_ville(pl.lit(x))).item() for x in (v1, v2))
+    a, b = cle(v1), cle(v2)
     if a == b:
         return "identique"
     return "proche" if JaroWinkler.normalized_similarity(a, b) >= 0.88 else "different"
@@ -131,7 +139,6 @@ def _meme_nom(recopie, attendu) -> bool:
         return True  # rien a verifier
     if not isinstance(recopie, str) or not recopie.strip():
         return False
-    cle = lambda x: pl.select(regles.norm_ville(pl.lit(x))).item() or ""  # noqa: E731
     r, a = cle(recopie), cle(attendu)
     return a in r or any(JaroWinkler.normalized_similarity(mot, a) >= 0.88 for mot in r.replace(".", " ").split())
 

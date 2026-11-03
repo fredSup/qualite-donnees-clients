@@ -72,7 +72,12 @@ def _meilleur(df: pl.DataFrame, colonnes: list[str], tri: list[pl.Expr], desc: l
     return meilleurs.select("client", *colonnes, pl.col("record_id").alias(f"origine_{requis}"))
 
 
-def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame) -> pl.DataFrame:
+def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame, extras: pl.DataFrame | None = None) -> pl.DataFrame:
+    """`extras` : les colonnes conservees telles quelles (montant, IBAN...), format long
+    (record_id, colonne, valeur). Chaque colonne s'ajoute a la fiche unique : on garde la valeur
+    de la fiche la plus recente qui la renseigne. Aucune colonne n'est perdue."""
+    if "id_client" not in silver.columns:  # donnees d'une version anterieure
+        silver = silver.with_columns(pl.lit(None, dtype=pl.String).alias("id_client"))
     df = _prioriser(silver.join(groupes, on="record_id"))
     r, p = pl.col("recence"), pl.col("prio_source")
 
@@ -98,6 +103,7 @@ def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame) -> pl.DataFrame:
         _meilleur(df, ["date_naissance"], [pl.col("freq_dn"), p, r], [True, False, True]),
         # e-mail : le plus recent (les autres restent dans la liste `emails`)
         _meilleur(df, ["email"], [r, p], [True, False]),
+        _meilleur(df, ["id_client"], [r, p], [True, False]),
         # telephone : un mobile de preference, puis le plus recent
         _meilleur(df, ["telephone"], [pl.col("est_mobile"), r], [True, True]),
         # adresse : UN bloc coherent, pris dans la fiche la plus recente qui a une adresse
@@ -119,18 +125,48 @@ def fusionner(silver: pl.DataFrame, groupes: pl.DataFrame) -> pl.DataFrame:
     def identifiant(rid: str) -> str:  # stable tant que les fiches d'origine ne changent pas
         return "CLI-" + hashlib.sha1(rid.encode()).hexdigest()[:10].upper()
 
-    return gold.with_columns(
+    resultat = gold.with_columns(
         client_id=pl.col("record_ids").list.first().map_elements(identifiant, return_dtype=pl.String),
         conflits=conflits,
     ).select(
-        "client_id", "civilite", "prenom", "nom", "email", "telephone", "adresse", "code_postal", "ville",
+        "client_id", "id_client", "civilite", "prenom", "nom", "email", "telephone", "adresse", "code_postal", "ville",
         "date_naissance", "date_premier_contact", "date_derniere_activite", "n_fiches", "sources",
         "emails", "telephones", "variantes_nom", "conflits", "record_ids",
         pl.struct(pl.col("^origine_.*$")).alias("lignage"),
     ).sort("client_id")
+    if extras is None or extras.is_empty():
+        return resultat
+    from qdc.ingestion import est_identifiant
+
+    # Desaccords : la meme colonne a des valeurs differentes selon les fiches d'un meme client
+    # (ex. Montant 1200 dans l'Excel, 1012.2 dans le CSV). On garde une valeur, mais on le SIGNALE.
+    # Les identifiants techniques de chaque logiciel different par nature : on ne les compare pas.
+    desaccords = (extras.filter(~pl.col("colonne").map_elements(est_identifiant, return_dtype=pl.Boolean))
+                  .join(df.select("record_id", "client"), on="record_id")
+                  .group_by("client", "colonne").agg(pl.col("valeur").unique().sort())
+                  .filter(pl.col("valeur").list.len() > 1)
+                  .with_columns(texte=pl.lit("désaccord sur « ") + pl.col("colonne") + pl.lit(" » : ")
+                                + pl.col("valeur").list.head(3).list.join(" / "))
+                  .group_by("client").agg(pl.col("texte").sort().alias("desaccords")))
+    recents = (extras.join(df.select("record_id", "client", "recence", "prio_source"), on="record_id")
+               .sort(["client", "colonne", "recence", "prio_source"], descending=[False, False, True, False],
+                     nulls_last=True)
+               .group_by("client", "colonne", maintain_order=True).first())
+    large = recents.pivot(on="colonne", index="client", values="valeur")
+    deja = set(resultat.columns)
+    large = large.rename({c: f"{c} (source)" for c in large.columns if c in deja and c != "client"})
+    lien = gold.select("client", pl.col("record_ids").list.first().map_elements(identifiant, return_dtype=pl.String)
+                       .alias("client_id"))
+    ordre = [c for c in large.columns if c != "client"]
+    lien_desaccords = lien.join(desaccords, on="client").select("client_id", "desaccords")
+    return (resultat.join(lien.join(large, on="client").drop("client"), on="client_id", how="left")
+            .join(lien_desaccords, on="client_id", how="left")
+            .with_columns(conflits=pl.concat_list("conflits", pl.col("desaccords").fill_null([]))).drop("desaccords")
+            .select(*[c for c in resultat.columns if c != "lignage"], *ordre, "lignage"))
 
 
-def pour_diagnostic(gold: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, set[str]]]:
+def pour_diagnostic(gold: pl.DataFrame, collectes: set[str] | None = None
+                    ) -> tuple[pl.DataFrame, dict[str, set[str]]]:
     """Met le referentiel au format attendu par le diagnostic, pour comparer avant / apres."""
     df = gold.select(
         pl.col("client_id").alias("record_id"), pl.lit("referentiel").alias("source"),
@@ -141,6 +177,8 @@ def pour_diagnostic(gold: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, set[str
     )
     champs = {"civilite", "prenom", "nom", "email", "telephone", "adresse", "code_postal", "ville",
               "date_naissance", "date_creation", "date_dernier_contact"}
+    if collectes is not None:  # un champ qu'AUCUNE source ne collecte n'est pas « manquant »
+        champs &= collectes | {"date_creation", "date_dernier_contact"}
     return df, {"referentiel": champs}
 
 
