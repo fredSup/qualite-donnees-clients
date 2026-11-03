@@ -48,8 +48,14 @@ def charger(contenu: bytes, nom: str) -> pl.DataFrame:
             sep = csv.Sniffer().sniff(texte[:20_000], delimiters=";,\t|").delimiter
         except csv.Error:
             sep = ","
-        return pl.read_csv(io.StringIO(texte), separator=sep, infer_schema_length=10_000,
-                           try_parse_dates=True, truncate_ragged_lines=True)
+        lire = lambda dates: pl.read_csv(io.StringIO(texte), separator=sep, infer_schema_length=10_000,  # noqa: E731
+                                         try_parse_dates=dates, truncate_ragged_lines=True)
+        try:
+            return lire(True)
+        except pl.exceptions.ComputeError:
+            # Dates en plusieurs formats dans une meme colonne (« 03/02/2025 », « 2025-02-04 ») :
+            # on les garde en texte, et l'atelier proposera de les convertir.
+            return lire(False)
     raise ValueError(f"Format non pris en charge : {ext} (formats acceptes : CSV, Excel, Parquet)")
 
 
@@ -191,6 +197,12 @@ def op_remplir_vides(df: pl.DataFrame, colonne: str, methode: str, valeur=None) 
         remplacement = ok.median() if methode == "mediane" else ok.mean()
         if s.dtype not in (pl.Float32, pl.Float64):
             remplacement = round(remplacement)
+        else:
+            # Meme precision que les autres valeurs de la colonne : un montant a 2 decimales
+            # reste a 2 decimales (69.84, et non 69.83500000000001).
+            decimales = int(ok.drop_nans().cast(pl.String).str.split(".").list.get(1, null_on_oob=True)
+                            .str.len_chars().fill_null(0).max() or 0)
+            remplacement = round(remplacement, min(decimales, 6))
     elif methode == "plus_frequente":
         remplacement = s.filter(~masque).mode().sort().first()
     elif methode == "valeur":
@@ -221,7 +233,8 @@ def op_supprimer_lignes_vides(df: pl.DataFrame, colonnes: list[str]) -> Resultat
 
 
 def op_traiter_aberrantes(df: pl.DataFrame, colonne: str, action: str, k: float = 1.5) -> Resultat:
-    """action : signaler (ajoute une colonne d'alerte) | plafonner (ramene aux bornes) | supprimer (les lignes)."""
+    """Valeurs INHABITUELLES (methode statistique de l'ecart interquartile).
+    action : signaler (colonne d'alerte) | vider | plafonner (ramene aux bornes) | supprimer (les lignes)."""
     _verifier_colonne(df, colonne)
     s = df[colonne]
     if s.dtype not in NUMERIQUES:
@@ -235,6 +248,9 @@ def op_traiter_aberrantes(df: pl.DataFrame, colonne: str, action: str, k: float 
     if action == "signaler":
         out = df.with_columns(hors.alias(f"{colonne}_aberrante"))
         msg = f"Valeurs aberrantes de « {colonne} » signalées (colonne « {colonne}_aberrante »)"
+    elif action == "vider":
+        out = df.with_columns(pl.when(hors).then(None).otherwise(pl.col(colonne)).alias(colonne))
+        msg = f"Valeurs inhabituelles de « {colonne} » vidées"
     elif action == "plafonner":
         borne = (lambda x: round(x)) if s.dtype not in (pl.Float32, pl.Float64) else (lambda x: x)
         out = df.with_columns(pl.col(colonne).clip(borne(bas), borne(haut)).cast(s.dtype))
@@ -334,13 +350,140 @@ def op_remplacer(df: pl.DataFrame, colonne: str, rechercher: str, remplacer: str
     return Resultat(out, int(masque.sum()), f"« {rechercher} » remplacé par {cible} dans « {colonne} »")
 
 
+# =====================================================================================
+# Regles de bon sens : « impossible » n'est pas « inhabituel »
+# =====================================================================================
+# La statistique dit « inhabituel par rapport aux autres » ; elle ne sait pas qu'un age ne peut pas
+# depasser 120 ans, ni qu'un panier ne peut pas etre negatif. Ces regles le disent. Elles viennent
+# de l'IA (si une cle est configuree) ou de cette liste ; l'utilisateur les valide ou les modifie,
+# et c'est le CODE qui les applique.
+REGLES_CONNUES = [
+    (("age",), 0, 120, "un âge est compris entre 0 et 120 ans"),
+    (("pourcentage", "taux", "pct", "remise"), 0, 100, "un pourcentage est compris entre 0 et 100"),
+    (("note", "score", "satisfaction"), 0, None, "une note n'est pas négative"),
+    (("quantite", "qte", "qty", "nombre", "nb"), 0, None, "une quantité n'est pas négative"),
+    (("panier", "prix", "price", "tarif", "cout", "montantachat", "ca", "chiffre"), 0, None,
+     "un prix ou un panier n'est pas négatif"),
+    (("annee", "year"), 1900, 2100, "une année est comprise entre 1900 et 2100"),
+]
+
+
+def _mots(nom: str) -> list[str]:
+    import unicodedata
+    t = "".join(c for c in unicodedata.normalize("NFD", nom.lower()) if unicodedata.category(c) != "Mn")
+    return re.findall(r"[a-z]+", t)
+
+
+def _n(x) -> str:
+    """120.0 -> « 120 » ; 12.5 -> « 12,5 »."""
+    return f"{x:g}".replace(".", ",") if isinstance(x, (int, float)) else str(x)
+
+
+def regles_par_defaut(df: pl.DataFrame) -> dict[str, dict]:
+    """Regles connues, reconnues au nom de la colonne (« Age client » -> age entre 0 et 120)."""
+    regles = {}
+    for col in df.columns:
+        if type_colonne(df[col]) not in ("nombre", "nombre (texte)"):
+            continue
+        mots = _mots(col)
+        colle = "".join(mots)
+        for cles, mini, maxi, raison in REGLES_CONNUES:
+            if any(c in mots or (len(c) > 4 and c in colle) for c in cles):
+                regles[col] = {"min": mini, "max": maxi, "raison": raison, "source": "règle connue"}
+                break
+    return regles
+
+
+PROMPT_REGLES = """Tu es expert en qualite des donnees. Pour chaque colonne NUMERIQUE d'un tableau, indique les
+valeurs POSSIBLES (pas habituelles : possibles). Exemple : un age entre 0 et 120, un panier >= 0,
+un pourcentage entre 0 et 100. Si tu ne sais pas, n'invente rien : mets null.
+Reponds UNIQUEMENT en JSON : {"regles": [{"colonne": "...", "min": nombre ou null, "max": nombre ou null,
+"raison": "phrase courte en francais"}]}"""
+
+
+def regles_ia(df: pl.DataFrame, appeler) -> dict[str, dict]:
+    """L'IA propose des regles a partir des noms de colonnes et de quelques exemples.
+    Garde-fous : seules les colonnes numeriques existantes sont acceptees, bornes numeriques, min <= max."""
+    import json
+    cols = [c for c in df.columns if type_colonne(df[c]) in ("nombre", "nombre (texte)")]
+    if not cols:
+        return {}
+    apercu = [{"colonne": c, "exemples": [str(x) for x in df[c].drop_nulls().head(6).to_list()]} for c in cols]
+    brut = json.loads(appeler([{"role": "system", "content": PROMPT_REGLES},
+                               {"role": "user", "content": json.dumps(apercu, ensure_ascii=False)}]))
+    regles = {}
+    for r in (brut.get("regles", []) if isinstance(brut, dict) else []):
+        if not isinstance(r, dict) or r.get("colonne") not in cols:
+            continue
+        mini, maxi = r.get("min"), r.get("max")
+        if not all(v is None or isinstance(v, (int, float)) for v in (mini, maxi)) or (mini is None and maxi is None):
+            continue
+        if mini is not None and maxi is not None and mini > maxi:
+            continue
+        regles[r["colonne"]] = {"min": mini, "max": maxi, "raison": str(r.get("raison", ""))[:120], "source": "IA"}
+    return regles
+
+
+def _hors_plage(colonne: str, mini, maxi) -> pl.Expr:
+    e = pl.lit(False)
+    if mini is not None:
+        e = e | (pl.col(colonne) < mini)
+    if maxi is not None:
+        e = e | (pl.col(colonne) > maxi)
+    return e.fill_null(False)
+
+
+def op_verifier_plage(df: pl.DataFrame, colonne: str, action: str, min=None, max=None) -> Resultat:  # noqa: A002
+    """Valeurs IMPOSSIBLES (hors des regles de bon sens). action : vider | signaler | supprimer.
+    Pas de « plafonner » ici : ramener un age de 245 ans a 120 fabriquerait une fausse valeur."""
+    _verifier_colonne(df, colonne)
+    if df[colonne].dtype not in NUMERIQUES:
+        raise ValueError(f"« {colonne} » n'est pas numérique : convertissez-la d'abord.")
+    hors = _hors_plage(colonne, min, max)
+    n = int(df.select(hors.sum()).item())
+    plage = f"{'' if min is None else _n(min)} à {'' if max is None else _n(max)}".strip()
+    if action == "vider":
+        out = df.with_columns(pl.when(hors).then(None).otherwise(pl.col(colonne)).alias(colonne))
+        msg = f"Valeurs impossibles de « {colonne} » vidées (hors {plage})"
+    elif action == "signaler":
+        out = df.with_columns(hors.alias(f"{colonne}_impossible"))
+        msg = f"Valeurs impossibles de « {colonne} » signalées (colonne « {colonne}_impossible »)"
+    elif action == "supprimer":
+        out = df.filter(~hors)
+        msg = f"Lignes avec une valeur impossible dans « {colonne} » supprimées"
+    else:
+        raise ValueError(f"Action inconnue : {action}")
+    return Resultat(out, n, msg)
+
+
+def op_dates_futures(df: pl.DataFrame, colonne: str, action: str) -> Resultat:
+    """Une date de commande, d'inscription ou de naissance ne peut pas etre dans le futur."""
+    _verifier_colonne(df, colonne)
+    if df[colonne].dtype not in (pl.Date, pl.Datetime):
+        raise ValueError(f"« {colonne} » n'est pas une date : convertissez-la d'abord.")
+    futur = (pl.col(colonne).cast(pl.Date) > pl.lit(date.today())).fill_null(False)
+    n = int(df.select(futur.sum()).item())
+    if action == "vider":
+        out, msg = df.with_columns(pl.when(futur).then(None).otherwise(pl.col(colonne)).alias(colonne)), \
+            f"Dates futures de « {colonne} » vidées"
+    elif action == "signaler":
+        out, msg = df.with_columns(futur.alias(f"{colonne}_future")), f"Dates futures de « {colonne} » signalées"
+    elif action == "supprimer":
+        out, msg = df.filter(~futur), f"Lignes avec une date future dans « {colonne} » supprimées"
+    else:
+        raise ValueError(f"Action inconnue : {action}")
+    return Resultat(out, n, msg)
+
+
 # Catalogue : nom technique -> (fonction, libelle, types de colonne compatibles)
 # « * » = toutes les colonnes ; None = l'operation ne cible pas une colonne precise.
 OPERATIONS = {
     "supprimer_doublons": (op_supprimer_doublons, "Supprimer les doublons", None),
     "remplir_vides": (op_remplir_vides, "Remplacer les valeurs vides", "*"),
     "supprimer_lignes_vides": (op_supprimer_lignes_vides, "Supprimer les lignes vides", "*"),
-    "traiter_aberrantes": (op_traiter_aberrantes, "Traiter les valeurs aberrantes", {"nombre"}),
+    "traiter_aberrantes": (op_traiter_aberrantes, "Traiter les valeurs inhabituelles (statistique)", {"nombre"}),
+    "verifier_plage": (op_verifier_plage, "Traiter les valeurs impossibles (hors d'une plage)", {"nombre"}),
+    "dates_futures": (op_dates_futures, "Traiter les dates dans le futur", {"date"}),
     "nettoyer_texte": (op_nettoyer_texte, "Nettoyer le texte (espaces, majuscules)",
                        {"texte", "email", "telephone", "nombre (texte)", "date (texte)"}),
     "convertir_nombre": (op_convertir_nombre, "Convertir en nombre", {"nombre (texte)", "texte"}),
@@ -421,10 +564,14 @@ def faux_vides(serie: pl.Series) -> dict[str, int]:
     return dict(trouves.value_counts().iter_rows()) if trouves.len() else {}
 
 
-def proposer(df: pl.DataFrame) -> list[Proposition]:
+def proposer(df: pl.DataFrame, regles: dict[str, dict] | None = None,
+             deja: set[tuple[str, str]] | None = None) -> list[Proposition]:
     """Ce que l'outil conseille. Il ne decide rien : il propose.
-    L'ORDRE compte : on traite les valeurs aberrantes AVANT de remplir les vides, sinon un age
-    de 212 ans fausserait la moyenne utilisee pour remplacer les ages manquants."""
+    L'ORDRE compte : valeurs impossibles, puis inhabituelles, AVANT de remplir les vides (sinon un age
+    de 245 ans fausserait la moyenne utilisee pour remplacer les ages manquants).
+    `deja` : (operation, colonne) deja dans la recette -> pas reproposees (sinon, apres un plafonnement,
+    les bornes recalculees faisaient reapparaitre la meme proposition, sans fin)."""
+    regles, deja = regles or {}, deja or set()
     profils, n_doublons = profiler(df)
     props: list[Proposition] = []
     texte, conversions, aberrantes, a_remplir, colonnes_vides = [], [], [], [], []
@@ -463,17 +610,61 @@ def proposer(df: pl.DataFrame) -> list[Proposition]:
             a_remplir.append(Proposition(f"{p.pct_vides:.1%} de vides dans « {p.nom} »".replace(".", ",").replace("%", " %"),
                                      pourquoi + " Remplacer des vides fausse un peu les analyses : à décider "
                                      "selon l'usage.", p.n_vides,
-                                     {("Médiane" if m == "mediane" else "Moyenne") + (" (conseillé)" if m == conseil else ""):
+                                     {("Médiane" if m == "mediane" else "Moyenne"):
                                       {"op": "remplir_vides", "colonne": p.nom, "methode": m} for m in ordre}))
-        if p.n_aberrantes:
-            aberrantes.append(Proposition(f"Valeurs aberrantes dans « {p.nom} »",
-                                     f"Valeurs anormalement basses ou hautes (min {p.stats['min']}, max "
-                                     f"{p.stats['max']}). Vérifiez avant de supprimer : ce sont parfois de vraies "
-                                     "valeurs (un très gros client).", p.n_aberrantes,
-                                     {"Signaler": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "signaler"},
-                                      "Plafonner": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "plafonner"},
-                                      "Supprimer": {"op": "traiter_aberrantes", "colonne": p.nom,
-                                                               "action": "supprimer"}}))
+        r = regles.get(p.nom)
+        if p.type == "nombre" and r and ("verifier_plage", p.nom) not in deja:
+            n_imp = int(df.select(_hors_plage(p.nom, r["min"], r["max"]).sum()).item())
+            if n_imp:
+                plage = (f"entre {_n(r['min'])} et {_n(r['max'])}" if r["min"] is not None and r["max"] is not None
+                         else f"au moins {_n(r['min'])}" if r["min"] is not None else f"au plus {_n(r['max'])}")
+                impossibles = df.filter(_hors_plage(p.nom, r["min"], r["max"]))[p.nom].unique().sort().head(5)
+                aberrantes.append(Proposition(
+                    f"Valeurs impossibles dans « {p.nom} »",
+                    f"{', '.join(_n(v) for v in impossibles.to_list())} : hors de la plage possible ({plage} ; "
+                    f"{r['raison']}, source : {r['source']}). Conseil : « Vider ». La vraie valeur est "
+                    "inconnue, mieux vaut une case vide qu'une valeur inventée.", n_imp,
+                    {"Vider": {"op": "verifier_plage", "colonne": p.nom, "action": "vider",
+                                           "min": r["min"], "max": r["max"]},
+                     "Signaler": {"op": "verifier_plage", "colonne": p.nom, "action": "signaler",
+                                  "min": r["min"], "max": r["max"]},
+                     "Supprimer": {"op": "verifier_plage", "colonne": p.nom, "action": "supprimer",
+                                              "min": r["min"], "max": r["max"]}}))
+        if p.type == "nombre" and ("traiter_aberrantes", p.nom) not in deja:
+            # Statistique calculee sur les seules valeurs POSSIBLES ; tolerance elargie (k = 3) pour les
+            # colonnes tres asymetriques (montants : quelques gros achats sont normaux).
+            ok = df[p.nom].drop_nulls()
+            if r:
+                ok = df.filter(~_hors_plage(p.nom, r["min"], r["max"]))[p.nom].drop_nulls()
+            asym = abs(float(ok.skew())) if ok.len() > 2 and ok.std() else 0.0
+            k = 3.0 if asym > 1 else 1.5
+            b = bornes_iqr(ok, k)
+            if b:
+                inhab = ok.filter((ok < b[0]) | (ok > b[1]))
+                bas = max(b[0], r["min"]) if r and r["min"] is not None else b[0]   # pas de -5 EUR affiche
+                haut = min(b[1], r["max"]) if r and r["max"] is not None else b[1]
+                if inhab.len():
+                    exemples = ", ".join(_n(v) for v in inhab.unique().sort().head(5).to_list())
+                    aberrantes.append(Proposition(
+                        f"Valeurs inhabituelles dans « {p.nom} »",
+                        f"{exemples} : très éloignées des autres valeurs (habituellement entre {_n(round(bas, 2))} et "
+                        f"{_n(round(haut, 2))}). Ce sont peut-être de vraies valeurs : conseil, « Signaler » et "
+                        "vérifier avant de modifier.",
+                        inhab.len(),
+                        {"Signaler": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "signaler",
+                                                  "k": k},
+                         "Vider": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "vider", "k": k},
+                         "Plafonner": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "plafonner", "k": k},
+                         "Supprimer": {"op": "traiter_aberrantes", "colonne": p.nom, "action": "supprimer", "k": k}}))
+        if p.type == "date" and ("dates_futures", p.nom) not in deja:
+            n_fut = int(df.select((pl.col(p.nom).cast(pl.Date) > pl.lit(date.today())).fill_null(False).sum()).item())
+            if n_fut:
+                aberrantes.append(Proposition(
+                    f"Dates dans le futur dans « {p.nom} »",
+                    "Une commande ou une inscription ne peut pas avoir lieu dans le futur : erreur de saisie probable.",
+                    n_fut, {"Vider": {"op": "dates_futures", "colonne": p.nom, "action": "vider"},
+                            "Signaler": {"op": "dates_futures", "colonne": p.nom, "action": "signaler"},
+                            "Supprimer": {"op": "dates_futures", "colonne": p.nom, "action": "supprimer"}}))
         if p.n_vides and p.type not in ("nombre",) and p.pct_vides > 0.5:
             colonnes_vides.append(Proposition(f"« {p.nom} » est vide à {p.pct_vides:.0%}",
                                      "Une colonne presque vide apporte peu d'information.", p.n_vides,

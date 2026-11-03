@@ -15,15 +15,17 @@ import polars as pl
 import streamlit as st
 
 from qdc import atelier
-from ui import carte, entete, nb, pastille
+from ui import carte, entete, ia_disponible, nb, pastille
 
 TYPES = {"nombre": "Nombre", "nombre (texte)": "Nombre écrit en texte", "date": "Date",
          "date (texte)": "Date écrite en texte", "email": "E-mail", "telephone": "Téléphone",
          "texte": "Texte", "booleen": "Oui / non", "autre": "Autre"}
 METHODES = {"mediane": "Médiane", "moyenne": "Moyenne", "plus_frequente": "Valeur la plus fréquente",
             "valeur": "Une valeur que je choisis"}
-ACTIONS = {"signaler": "Signaler (ajoute une colonne d'alerte)", "plafonner": "Plafonner (ramener aux bornes)",
-           "supprimer": "Supprimer les lignes"}
+ACTIONS = {"signaler": "Signaler (ajoute une colonne d'alerte)", "vider": "Vider la valeur",
+           "plafonner": "Plafonner (ramener aux bornes)", "supprimer": "Supprimer les lignes"}
+ACTIONS_IMPOSSIBLES = {"vider": "Vider la valeur (conseillé)", "signaler": "Signaler (ajoute une colonne d'alerte)",
+                       "supprimer": "Supprimer les lignes"}
 CASSES = {"aucune": "Ne pas changer", "majuscules": "MAJUSCULES", "minuscules": "minuscules", "titre": "Majuscule En Tête"}
 
 
@@ -56,6 +58,64 @@ def ajouter(operation: dict) -> None:
         return
     s["at_recette"] = essai
     st.session_state.pop("at_erreur", None)
+
+
+def regles(df: pl.DataFrame) -> dict[str, dict]:
+    """Regles de bon sens du fichier : proposees une fois par l'IA (si une cle est configuree),
+    sinon par la liste des regles connues. L'utilisateur peut ensuite les modifier."""
+    s = _etat()
+    if s.get("at_regles_cle") != s.get("at_cle"):
+        trouvees = atelier.regles_par_defaut(df)
+        if ia_disponible():
+            try:
+                trouvees = {**trouvees, **atelier.regles_ia(df, appeler_ia)}
+            except Exception:  # IA indisponible : les regles connues suffisent
+                pass
+        s["at_regles"], s["at_regles_cle"] = trouvees, s.get("at_cle")
+    return s["at_regles"]
+
+
+def appeler_ia(messages: list[dict]) -> str:
+    import os
+
+    from groq import Groq
+    modele = os.environ.get("QDC_MODELE", "openai/gpt-oss-20b")
+    options = {"reasoning_effort": "low"} if modele.startswith("openai/gpt-oss") else {}
+    r = Groq().chat.completions.create(model=modele, messages=messages, temperature=0, max_tokens=1500,
+                                       response_format={"type": "json_object"}, **options)
+    return r.choices[0].message.content or "{}"
+
+
+def editeur_regles(df: pl.DataFrame) -> None:
+    s = _etat()
+    actuelles = regles(df)
+    numeriques = [c for c in df.columns if atelier.type_colonne(df[c]) in ("nombre", "nombre (texte)")]
+    if not numeriques:
+        return
+    with st.expander(f"Règles de bon sens · {len(actuelles)} colonne{'s' if len(actuelles) > 1 else ''}",
+                     expanded=False):
+        st.caption("Ce qui est **possible** pour chaque colonne (un âge entre 0 et 120 ans). Hors de ces limites, "
+                   "une valeur est **impossible** : c'est une erreur, pas une valeur inhabituelle. "
+                   + ("Règles proposées par l'IA, puis vérifiables ici." if ia_disponible()
+                      else "Règles connues ; ajoutez les vôtres."))
+        tableau = pl.DataFrame({
+            "Colonne": numeriques,
+            "Minimum": [actuelles.get(c, {}).get("min") for c in numeriques],
+            "Maximum": [actuelles.get(c, {}).get("max") for c in numeriques],
+            "Source": [actuelles.get(c, {}).get("source", "") for c in numeriques],
+        }, schema={"Colonne": pl.String, "Minimum": pl.Float64, "Maximum": pl.Float64, "Source": pl.String})
+        edite = st.data_editor(tableau, hide_index=True, width="stretch", disabled=["Colonne", "Source"],
+                               key=f"at_regles_ed_{s.get('at_cle')}")
+        nouvelles = {}
+        for c, mini, maxi, src in edite.iter_rows():
+            if mini is None and maxi is None:
+                continue
+            ancienne = actuelles.get(c, {})
+            change = (mini, maxi) != (ancienne.get("min"), ancienne.get("max"))
+            nouvelles[c] = {"min": mini, "max": maxi,
+                            "raison": "règle saisie" if change else ancienne.get("raison", "règle saisie"),
+                            "source": "vous" if change else (src or "vous")}
+        s["at_regles"] = nouvelles
 
 
 def nouveau_fichier(df: pl.DataFrame, nom: str) -> None:
@@ -160,12 +220,28 @@ def formulaire_operation(df: pl.DataFrame) -> None:
                 st.caption("Médiane et moyenne : seulement pour les colonnes numériques.")
         elif op == "traiter_aberrantes":
             params["action"] = st.radio("Action", list(ACTIONS), format_func=ACTIONS.get)
+        elif op == "verifier_plage":
+            c1, c2 = st.columns(2)
+            mini = c1.text_input("Minimum possible", placeholder="0")
+            maxi = c2.text_input("Maximum possible", placeholder="120")
+            try:
+                params["min"] = float(mini.replace(",", ".")) if mini.strip() else None
+                params["max"] = float(maxi.replace(",", ".")) if maxi.strip() else None
+            except ValueError:
+                st.caption("Indiquez des nombres.")
+                params["min"] = params["max"] = None
+            params["action"] = st.radio("Action", list(ACTIONS_IMPOSSIBLES), format_func=ACTIONS_IMPOSSIBLES.get)
+            if params["min"] is None and params["max"] is None:
+                params["colonne"] = None  # rien a verifier tant qu'aucune borne n'est donnee
+        elif op == "dates_futures":
+            params["action"] = st.radio("Action", list(ACTIONS_IMPOSSIBLES), format_func=ACTIONS_IMPOSSIBLES.get)
         elif op == "remplacer":
             params["rechercher"] = st.text_input("Valeur exacte à remplacer", placeholder="N/A")
             params["remplacer"] = st.text_input("Remplacer par (vide = laisser vide)")
         elif op == "renommer":
             params["nouveau"] = st.text_input("Nouveau nom")
-    pret = all(v not in (None, [], "") for k, v in params.items() if k not in ("colonnes", "remplacer", "valeur")) \
+    pret = all(v not in (None, [], "") for k, v in params.items()
+               if k not in ("colonnes", "remplacer", "valeur", "min", "max")) \
         and (op != "supprimer_colonnes" or params.get("colonnes"))
     if op in ("supprimer_lignes_vides", "nettoyer_texte"):
         pret = pret and bool(params.get("colonnes"))
@@ -181,7 +257,9 @@ def etape_atelier() -> None:
         st.error(s["at_erreur"])
     g, d = st.columns([1.55, 1])
     with g:
-        props = [p for p in atelier.proposer(df) if p.titre not in s["at_ignorees"]]
+        editeur_regles(df)
+        deja = {(o["op"], o.get("colonne")) for o in s["at_recette"]}
+        props = [p for p in atelier.proposer(df, s.get("at_regles", {}), deja) if p.titre not in s["at_ignorees"]]
         st.markdown(f"#### Propositions de l'outil · {len(props)}")
         if not props:
             st.success("Plus rien à proposer : le fichier semble propre. Vous pouvez encore ajouter vos propres "

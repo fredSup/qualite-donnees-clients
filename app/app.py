@@ -279,7 +279,7 @@ def ecran_diagnostic() -> None:
     for i, (dim, t) in enumerate(apres.resume.select("dimension", "taux").iter_rows()):
         with (g if i % 2 == 0 else d):
             barre(f"<b>{dim}</b> · <span class='u-note'>{explications.get(dim, '')}</span>", t, a.get(dim))
-    st.caption("L'unicité ne compte ici que les doublons évidents (même e-mail ou même téléphone) : "
+    st.caption("L'unicité ne compte ici que les doublons évidents (même e-mail, même téléphone ou même identifiant client) : "
                "les cas douteux encore en attente n'y apparaissent pas.")
 
     st.markdown("### Par source, avant traitement")

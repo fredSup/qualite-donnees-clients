@@ -106,9 +106,73 @@ def test_propositions():
     assert "Supprimer les doublons exacts" in titres
     assert any("montant" in t and "texte" in t for t in titres)
     assert any("vides" in t and "age" in t for t in titres)
-    assert any("aberrantes" in t and "age" in t for t in titres)
+    assert any("inhabituelles" in t and "age" in t for t in titres)
 
 
 def test_colonnes_compatibles_filtrees():
     df = atelier.op_convertir_nombre(_ventes(), "montant").df
     assert set(atelier.colonnes_compatibles(df, "traiter_aberrantes")) == {"montant", "age"}
+
+
+def test_csv_avec_dates_de_formats_melanges_se_charge():
+    """Bug trouve en preparant les tests de Frederic : le chargement plantait."""
+    contenu = "ref;date\nA;03/02/2025\nB;2025-02-04\nC;05.02.2025\n".encode("utf-8")
+    df = atelier.charger(contenu, "commandes.csv")
+    assert df.height == 3 and atelier.type_colonne(df["date"]) == "date (texte)"
+
+
+def _commandes():
+    from pathlib import Path
+    f = Path(__file__).parent / "donnees" / "test_mode1_commandes.csv"
+    return atelier.charger(f.read_bytes(), f.name)
+
+
+def test_regles_connues_reconnues_au_nom_de_la_colonne():
+    df = pl.DataFrame({"Age client": [30, 40], "Panier": [10.0, 20.0], "Ville": ["a", "b"]})
+    r = atelier.regles_par_defaut(df)
+    assert (r["Age client"]["min"], r["Age client"]["max"]) == (0, 120)
+    assert r["Panier"]["min"] == 0 and "Ville" not in r
+
+
+def test_fichier_de_test_mode1_impossible_et_inhabituel_distingues():
+    """Le corrige : ages 245, -4, 999 IMPOSSIBLES ; le panier de 120 EUR n'est PAS une anomalie."""
+    df, _ = atelier.appliquer(_commandes(), [{"op": "supprimer_doublons"},
+                                             {"op": "convertir_nombre", "colonne": "Panier"}])
+    props = atelier.proposer(df, atelier.regles_par_defaut(df))
+    impossibles = next(p for p in props if p.titre == "Valeurs impossibles dans « Age »")
+    assert impossibles.n == 3 and list(impossibles.choix)[0] == "Vider"
+    inhab_panier = [p for p in props if p.titre == "Valeurs inhabituelles dans « Panier »"]
+    assert all("120" not in p.explication for p in inhab_panier)   # plus de faux positif sur 120 EUR
+    vide, _ = atelier.appliquer(df, [impossibles.choix["Vider"]])
+    assert vide["Age"].null_count() == 2 + 3 and vide["Age"].max() <= 120   # rien d'invente
+
+
+def test_une_colonne_traitee_n_est_plus_reproposee():
+    df = pl.DataFrame({"age": [30, 31, 32, 33, 34, 35, 36, 37, 38, 250]})
+    recette = [{"op": "traiter_aberrantes", "colonne": "age", "action": "plafonner"}]
+    propre, _ = atelier.appliquer(df, recette)
+    deja = {(o["op"], o.get("colonne")) for o in recette}
+    assert not [p for p in atelier.proposer(propre, deja=deja) if "age" in p.titre and "inhabituelles" in p.titre]
+
+
+def test_dates_dans_le_futur():
+    df = pl.DataFrame({"inscription": [date(2024, 1, 1), date(2099, 1, 1)]})
+    assert any("futur" in p.titre for p in atelier.proposer(df))
+    assert atelier.op_dates_futures(df, "inscription", "vider").df["inscription"].null_count() == 1
+
+
+def test_regles_proposees_par_l_ia_sont_controlees():
+    import json
+    df = pl.DataFrame({"Age": [30, 40], "Note": [3, 4]})
+    rep = json.dumps({"regles": [{"colonne": "Age", "min": 0, "max": 120, "raison": "âge humain"},
+                                 {"colonne": "Inventee", "min": 0, "max": 1},          # colonne inexistante
+                                 {"colonne": "Note", "min": 10, "max": 1}]})            # min > max
+    r = atelier.regles_ia(df, lambda m: rep)
+    assert list(r) == ["Age"] and r["Age"]["source"] == "IA"
+
+
+def test_valeur_de_remplacement_a_la_precision_de_la_colonne():
+    """Bug trouve par Frederic : un panier rempli par la moyenne valait 69.83500000000001."""
+    df = pl.DataFrame({"panier": [45.9, 120.0, 38.5, 64.2, 81.35, None]})
+    r = atelier.op_remplir_vides(df, "panier", "moyenne")
+    assert r.df["panier"][-1] == round((45.9 + 120.0 + 38.5 + 64.2 + 81.35) / 5, 2)

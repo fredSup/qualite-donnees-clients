@@ -1,0 +1,29 @@
+Réf;Client;Email;Ville;Age;Panier;Date commande;Statut
+C001;Alice Morel;alice.morel@gmail.com;Lyon;34;45,90 €;03/02/2025;payée
+C002;Bruno Caron;bruno.caron@free.fr;Paris;41;120,00 €;2025-02-04;payée
+C003;  Chloé Faure;chloe.faure@orange.fr;Nantes;29;38,50 €;05.02.2025;payée
+C004;David Roche;david.roche@gmail.com;Lille;;64,20 €;06/02/2025;N/A
+C005;Emma Petit ;emma.petit@yahoo.fr;Paris;52;1 250,00 €;07/02/2025;payée
+C006;Fabien Lemoine;fabien.lemoine@gmail.com;-;37;72,10 €;2025-02-08;remboursée
+C007;Gaëlle Henry;gaelle.henry@free.fr;Rennes;245;55,00 €;09/02/2025;payée
+C008;Hugo Blanc;hugo.blanc@gmail.com;Lyon;33;;10/02/2025;payée
+C009;Inès Garnier;ines.garnier@outlook.fr;Bordeaux;27;49,90 €;11/02/2025;N/A
+C010;Julien  Perrin;julien.perrin@gmail.com;Paris;45;81,30 €;12.02.2025;payée
+C011;Karim Dubois;karim.dubois@gmail.com;Marseille;-4;59,00 €;2025-02-13;payée
+C012;Laura Colin;laura.colin@orange.fr;Toulouse;31;66,40 €;14/02/2025;payée
+C013;Mehdi Robin;mehdi.robin@gmail.com;Nice;48;92,00 €;15/02/2025;remboursée
+C014;Nina Brun;nina.brun@free.fr;Paris;;47,80 €;16/02/2025;payée
+C015;Olivier Gauthier;olivier.gauthier@gmail.com;Lyon;39;58,60 €;2025-02-17;payée
+C016;Pauline Mercier;pauline.mercier@yahoo.fr;Nantes;36;53,20 €;18/02/2025;N/A
+C017;Quentin Fontaine;quentin.fontaine@gmail.com;Lille;44;75,00 €;19/02/2025;payée
+C018;Rose Chevalier;rose.chevalier@orange.fr;-;30;61,10 €;20.02.2025;payée
+C019;Samuel Lambert;samuel.lambert@gmail.com;Paris;55;70,70 €;21/02/2025;payée
+C020;Tania Bonnet;tania.bonnet@free.fr;Bordeaux;999;68,90 €;2025-02-22;payée
+C021;Ugo Martin;ugo.martin@gmail.com;Lyon;28;;23/02/2025;payée
+C022;Valérie Roux;valerie.roux@gmail.com;Paris;50;88,00 €;24/02/2025;payée
+C023;William Girard;william.girard@outlook.fr;Rennes;42;57,30 €;25/02/2025;payée
+C024;Yasmine Andre;yasmine.andre@gmail.com;Toulouse;35;63,50 €;26/02/2025;payée
+C025;Zoé Lefèvre;zoe.lefevre@free.fr;Paris;38;54,40 €;27/02/2025;payée
+C002;Bruno Caron;bruno.caron@free.fr;Paris;41;120,00 €;2025-02-04;payée
+C012;Laura Colin;laura.colin@orange.fr;Toulouse;31;66,40 €;14/02/2025;payée
+C020;Tania Bonnet;tania.bonnet@free.fr;Bordeaux;999;68,90 €;2025-02-22;payée
